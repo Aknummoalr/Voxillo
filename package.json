@@ -4,22 +4,20 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-<<<<<<< HEAD
     "test": "echo \"Error: no test specified\" && exit 1",
-=======
-    "test": "node servr.js",
->>>>>>> 497cc2a8ddc354315ca2619943e5c0ed3e43f5ef
     "start": "nodemon server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^0.10.0",
+    "@google/generative-ai": "^0.24.0",
+    "@pinecone-database/pinecone": "^5.1.2",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "mongodb": "^6.15.0",
     "mongoose": "^8.13.2",
-    "openai": "^4.95.1",
     "twilio": "^5.5.2",
     "uuid": "^11.1.0",
     "ws": "^8.18.1"

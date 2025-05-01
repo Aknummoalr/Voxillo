@@ -1,75 +1,114 @@
 const express = require('express');
 const { VoiceResponse } = require('twilio').twiml;
-const { handleGather } = require('../services/twilio');
+//const { handleGather } = require('../services/twilio');
 const twilio = require('twilio');
 const config = require('../config');
-
+const { processQuery } = require('../services/gemini');
+const { storeConversation } = require('../services/pinecone');
 const router = express.Router();
 const twilioClient = twilio(config.twilio.accountSid, config.twilio.authToken);
 
-// Handle GET for webhook verification
+const sid =[];
+
 router.get('/voice', (req, res) => {
   res.status(200).send('Twilio webhook endpoint');
 });
 
-// Handle POST for voice webhook
-router.post('/voice', (req, res) => {
+router.post('/voice',async (req, res) => {
+  console.log('voice run');
   const twiml = new VoiceResponse();
-  twiml.gather({
-    input: 'speech',
-    action: '/twilio/gather',
-    speechTimeout: 'auto',
-    hints: 'help, information, support',
-  }).say({ voice: 'Polly.Joanna-Neural' }, 'Welcome to the ChatGPT assistant. Please speak your query.');
-  res.type('text/xml');
-  res.send(twiml.toString());
+  const callSid = req.body.CallSid;
+
+  try {
+    console.log("Call SId :", callSid);
+
+    //check if user called first time or not
+    if(!sid.includes(callSid)){
+      twiml.say({voice:'Polly.Kajal-Neural'}, "Hello, thank You for contacting me,  Ask me Your Question ")
+    }
+    else{
+      twiml.say({voice:'Polly.Kajal-Neural'},"Ask me Your next Question");
+    }
+
+    sid.push(callSid);
+    
+    twiml.gather({
+      input:'speech',
+      speechTimeout:'auto',
+      speechModel:'experimental_conversations',
+      action:'/twilio/gather',
+      method:'POST',
+    });
+    res.type('text/xml');
+    res.send(twiml.toString());
+
+  } catch (error) {
+    console.error('Error in /voice:', error.message, error.stack);
+    twiml.say({ voice: 'Polly.Kajal-Neural' }, 'Sorry, an error occurred. Please try again.');
+    res.type('text/xml');
+    res.send(twiml.toString());
+  }
 });
 
-// Handle POST for gathered speech
+
+
 router.post('/gather', async (req, res) => {
-  console.log('Received webhook:', req.body);
-  if (!req.body) {
-    const twiml = new VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Invalid request. Please try again.');
-    res.type('text/xml');
-    res.send(twiml.toString());
-    return;
-  }
-
-  const { CallSid, From, To, SpeechResult } = req.body;
-  if (!CallSid || !From || !To) {
-    const twiml = new VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Missing call details. Please try again.');
-    res.type('text/xml');
-    res.send(twiml.toString());
-    return;
-  }
-
+  const twiml = new VoiceResponse();
+  const { SpeechResult, CallSid, From,To } = req.body;  
   if (!SpeechResult) {
-    const twiml = new VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Sorry, I didn’t hear anything. Please try again.');
-    twiml.redirect('/twilio/voice');
-    res.type('text/xml');
-    res.send(twiml.toString());
-    return;
+    twiml.say({ voice: 'Polly.Kajal-Neural' }, "Sorry, I didn't hear anything. Please say that again.");
+    twiml.redirect('/twilio/voice');  // Redirect phirse
+    return res.type('text/xml').send(twiml.toString());
   }
 
-  const twiml = await handleGather(CallSid, From, To, SpeechResult);
-  res.type('text/xml');
-  res.send(twiml);
+  console.log("Caller said:", SpeechResult);
+
+  try {
+    const geminiResponse = await processQuery(SpeechResult);
+    
+    if (geminiResponse.type === 'dial') {
+      twiml.say({ voice: 'Polly.Kajal-Neural' }, "Transferring you now...");
+      
+      twiml.dial(geminiResponse.number);  
+      
+    } else {
+      twiml.say({ voice: 'Polly.Kajal-Neural' }, geminiResponse.message);
+      twiml.pause({ length: 2 });
+      twiml.redirect('/twilio/voice');
+    }
+    
+    await storeConversation({
+      callSid: CallSid,
+      from:From,
+      to:To,
+      userInput: SpeechResult,
+      assistantResponse: geminiResponse.message || 'NO response'
+    })
+
+    res.type('text/xml');
+    res.send(twiml.toString());
+  } catch (error) {
+    console.error("Error in /gather:", error.message, error.stack);
+    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Sorry, there was an issue processing your request.');
+    res.type('text/xml');
+    res.send(twiml.toString());
+  }
 });
+
+
+
 
 router.post('/outbound', async (req, res) => {
+  console.log("call")
   const { to } = req.body;
   if (!to) {
     return res.status(400).json({ error: 'Recipient phone number is required' });
   }
-
   try {
     const call = await twilioClient.calls.create({
       to,
       from: config.twilio.phoneNumber,
-      url: ${config.serverUrl}/twilio/voice,
+      url: `${config.serverUrl}/twilio/voice`,
       method: 'POST',
     });
     res.json({ message: 'Outbound call initiated', callSid: call.sid });
